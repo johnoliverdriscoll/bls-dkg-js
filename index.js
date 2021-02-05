@@ -3,9 +3,15 @@
 const bls = require('noble-bls12-381')
 const math = require('noble-bls12-381/math')
 
-/** Convert a buffer to a native BigInt. */
+/** Convert a Buffer to a native BigInt. */
 function bufferToBigInt(buf) {
-  return buf.reduce((bn, byte, i) => bn + (BigInt(byte) << (8n * BigInt(buf.length - i - 1))), 0n)
+  return BigInt('0x' + buf.toString('hex'))
+}
+
+/** Convert a native BigInt to a Buffer. */
+function bigIntToBuffer(bigint) {
+  const hex = bigint.toString(16)
+  return Buffer.from('0'.slice(0, hex.length % 2) + hex, 'hex')
 }
 
 /** Return a random field element as a native BigInt. */
@@ -52,7 +58,7 @@ function secretShares(poly, n) {
 
 /** Generate a participant's public share. */
 function publicShare(poly) {
-  return bls.PointG1.BASE.multiply(poly[0])
+  return bufferToBigInt(Buffer.from(bls.PointG1.BASE.multiply(poly[0]).toCompressedHex()))
 }
 
 /** Merge secret shares to produce a signing key. */
@@ -62,7 +68,10 @@ function mergeSecretShares(shares) {
 
 /** Merge public shares to produce a common public key. */
 function mergePublicShares(shares) {
-  return shares.reduce((sum, share) => sum.add(share))
+  const sum = shares.slice(1).reduce((sum, share) => {
+    return sum.add(bls.PointG1.fromCompressedHex(bigIntToBuffer(share)))
+  }, bls.PointG1.fromCompressedHex(bigIntToBuffer(shares[0])))
+  return bufferToBigInt(Buffer.from(sum.toCompressedHex()))
 }
 
 /** Compute Lagrange coefficients for a point in a polynomial. */
@@ -87,9 +96,9 @@ function mergeSignatures(shares) {
   const coeffs = lagrangeCoefficients(ids.map(id => BigInt(id)))
   let sign = bls.PointG2.ZERO
   for (let i = 0; i < ids.length; i++) {
-    sign = sign.add(shares[ids[i]].multiply(coeffs[i]))
+    sign = sign.add(bls.PointG2.fromSignature(bigIntToBuffer(shares[ids[i]])).multiply(coeffs[i]))
   }
-  return sign
+  return bufferToBigInt(Buffer.from(sign.toSignature()))
 }
 
 /** Generic BLS sign function. Can be used with a secret key or a secret share. */
@@ -98,7 +107,7 @@ async function sign(message, key) {
     message = new Uint8Array(Buffer.from(message))
   }
   const hashPoint = await bls.PointG2.hashToCurve(message)
-  return hashPoint.multiply(new math.Fq(key))
+  return bufferToBigInt(Buffer.from(hashPoint.multiply(new math.Fq(key)).toSignature()))
 }
 
 /** Generic BLS verify function. Can be used with a pubilc key or a public share. */
@@ -106,7 +115,7 @@ async function verify(sig, message, key) {
   if (typeof message === 'string') {
     message = new Uint8Array(Buffer.from(message))
   }
-  return await bls.verify(sig, message, key)
+  return await bls.verify(bls.PointG2.fromSignature(bigIntToBuffer(sig)), message, bls.PointG1.fromCompressedHex(bigIntToBuffer(key)))
 }
 
 module.exports = {
